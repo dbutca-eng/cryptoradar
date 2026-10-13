@@ -2,7 +2,7 @@
 
 Usage: python3 build_report.py <trendradar-daily.json> [out.html]
 Input: saved output of Signum get-trendradar-daily (assetClass=crypto, detector=gc,
-indicatorFields=["bo"], limit=100). Writes the HTML email body WITHOUT the
+indicatorFields=["bo","data.gc"], limit=100). Writes the HTML email body WITHOUT the
 analyst conclusion / disclaimer (append those) and prints a JSON summary to stderr.
 """
 import json, sys, datetime as dt, html
@@ -45,6 +45,20 @@ fl={k:int(v) for k,v in a.items()}
 rem=TOT-sum(fl.values())
 for k in sorted(a,key=lambda k:-(a[k]-int(a[k])))[:rem]: fl[k]+=1
 notsel=elig[N:]
+# TP/SL per asset: entry = refPriceUsd (last closed close); SL = GC lower band of the
+# last closed candle (trend invalidation), falling back to breakout support below entry;
+# R = entry - SL; TP1 = entry + 1.5R, TP2 = entry + 3R.
+RISKMAX=20
+def tpsl(r):
+    ind=r.get('indicators') or {}; e=ind.get('refPriceUsd')
+    if not e: return None
+    c=sorted(ind.get('data') or [],key=lambda c:c['date'])
+    lo=c[-1]['gc']['lower'] if c and c[-1].get('gc') else None
+    sl,src=(lo,'banda GC') if lo and lo<e else ((r['breakoutSupport'],'support breakout') if r['breakoutSupport'] and r['breakoutSupport']<e else (None,None))
+    if sl is None: return None
+    R=e-sl
+    return {'e':e,'sl':sl,'src':src,'risk':R/e*100,'tp1':e+1.5*R,'tp2':e+3*R}
+for r in rows: r['tpsl']=tpsl(r)
 def pct(x): return f"{x:+.1f}%" if x is not None else "—"
 def bo(r):
     if r['breakoutInvalidatedAt']: return f'<font color="#c0392b">invalidat ({r["breakoutInvalidatedAt"]})</font>'
@@ -96,10 +110,18 @@ def why(r):
     if fl[id(r)]>=CAP: parts.append('plafonat la 30%')
     return f"scor {r['score']:.1f} · "+', '.join(parts)
 o.append(table(['Monedă','USD','%','Justificare'],[[coin(r),f"${fl[id(r)]}",f"{fl[id(r)]/10:.1f}%",why(r)] for r in sel]+[['<b>Total</b>',f"<b>${sum(fl.values())}</b>",'<b>100%</b>','']]))
+# TP/SL
+o.append('<h3>Take Profit / Stop Loss</h3><p style="font-size:12px;color:#667085">Intrare = prețul de închidere al ultimei lumânări 1D. SL = banda inferioară GC (nivelul care invalidează trendul; dacă lipsește, support-ul de breakout). R = intrare − SL; TP1 = intrare + 1,5R, TP2 = intrare + 3R. Risc USD = suma alocată × distanța până la SL. ⚠ = SL mai departe de '+str(RISKMAX)+'%.</p>')
+def tsrow(r):
+    t=r['tpsl']; u=fl.get(id(r))
+    if not t: return [coin(r),'—','—','—','—','—','—']
+    return [coin(r),'$'+num(t['e']),f'<font color="#c0392b">${num(t["sl"])}</font> ({-t["risk"]:.1f}%{" ⚠" if t["risk"]>RISKMAX else ""})',t['src'],f'<font color="#1e8449">${num(t["tp1"])}</font> (+{1.5*t["risk"]:.1f}%)',f'<font color="#1e8449">${num(t["tp2"])}</font> (+{3*t["risk"]:.1f}%)',f"${u*t['risk']/100:.0f}" if u else '—']
+rk=sum(fl[id(r)]*r['tpsl']['risk']/100 for r in sel if r['tpsl'])
+o.append(table(['Monedă','Intrare','SL','Sursă SL','TP1 (1,5R)','TP2 (3R)','Risc USD'],[tsrow(r) for r in sel]+[['<b>Total</b>','','','','','',f'<b>${rk:.0f}</b> ({rk/TOT*100:.1f}%)']]))
 if watch: o.append('<p style="font-size:12px"><b>În observație (excluse):</b> '+', '.join(f"{r['baseCoin']} ({pct(r['trendLongEntryPnlPct'])})" for r in watch)+'.</p>')
 if notsel: o.append('<p style="font-size:12px;color:#667085"><b>Eligibile dar sub prag (scor mai mic):</b> '+', '.join(r['baseCoin'] for r in notsel[:10])+(f' și alte {len(notsel)-10}' if len(notsel)>10 else '')+'.</p>')
 # negative
 o.append(f'<h3 style="color:#c0392b">Trend negativ (primele 10 după rank, din {Y})</h3>')
 o.append(table(['Monedă','Rank','Schimbat la'],[[coin(r),r['marketRank'],r['trendChanged']] for r in sorted(neg,key=lambda r:r['marketRank'])[:10]]))
-print(json.dumps({'subj':subj,'N':N,'alloc':[(r['baseCoin'],fl[id(r)],round(r['score'],1)) for r in sel],'watch':[r['baseCoin'] for r in watch],'ch':[r['baseCoin'] for r in ch],'X':X,'Y':Y}),file=sys.stderr)
+print(json.dumps({'subj':subj,'N':N,'alloc':[(r['baseCoin'],fl[id(r)],round(r['score'],1)) for r in sel],'watch':[r['baseCoin'] for r in watch],'ch':[r['baseCoin'] for r in ch],'X':X,'Y':Y,'tpsl':{r['baseCoin']:{k:round(v,6) if isinstance(v,float) else v for k,v in r['tpsl'].items()} for r in sel if r['tpsl']}}),file=sys.stderr)
 open(sys.argv[2] if len(sys.argv)>2 else 'body.html','w').write('\n'.join(o))
