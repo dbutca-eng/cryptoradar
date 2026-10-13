@@ -1,6 +1,6 @@
 """TP/SL backtest on daily candles (default: BTCUSDT, 100 USD from 2026-01-01).
 
-Usage: python3 sim_tpsl.py [candles.csv] [--start 2026-01-01] [--usd 100] [--symbol BTCUSDT] [--breakeven]
+Usage: python3 sim_tpsl.py [candles.csv] [--start 2026-01-01] [--usd 100] [--symbol BTCUSDT] [--breakeven] [--trend 20]
 Without a CSV, daily candles are fetched from the Binance public API.
 CSV columns: date,open,high,low,close (date = YYYY-MM-DD, one row per day), or a
 TradingView "Export chart data" file (time in unix seconds; regular candles, not Heikin Ashi).
@@ -12,6 +12,8 @@ Rules:
   R = entry - SL; TP1 = entry + 1.5R; TP2 = entry + 3R.
 - TP1: sell 50% of the position. TP2: sell the rest. SL: sell whatever is left.
 - --breakeven: after TP1, move SL to the entry price (active from the next candle).
+- --trend N: after an exit, buy again only once a daily close is above its N-day
+  simple moving average (entry at the next open). The first buy is unconditional.
 - If SL and a TP fall inside the same candle, SL is assumed first (conservative).
 - Fee FEE per side on every buy/sell.
 """
@@ -24,6 +26,7 @@ def opt(n, d):
 BE = '--breakeven' in a
 a = [x for x in a if x != '--breakeven']
 START, USD, SYM = opt('--start', '2026-01-01'), float(opt('--usd', 100)), opt('--symbol', 'BTCUSDT')
+MA = int(opt('--trend', 0))
 
 def binance(sym, start):
     t0 = int(dt.datetime.fromisoformat(start).replace(tzinfo=dt.timezone.utc).timestamp()*1000) - (ATRN+2)*86400000
@@ -50,7 +53,7 @@ atr = [None]*len(c)
 for i in range(ATRN-1, len(c)):
     atr[i] = sum(tr[:ATRN])/ATRN if i == ATRN-1 else (atr[i-1]*(ATRN-1)+tr[i])/ATRN
 s = next(i for i, r in enumerate(c) if r['date'] >= START)
-if s < 1 or atr[s-1] is None: sys.exit(f'need at least {ATRN+1} candles before {START}')
+if s < max(ATRN, MA) + 1: sys.exit(f'need at least {max(ATRN, MA)+1} candles before {START}')
 
 cash, qty, pos, log, trade = USD, 0.0, None, [], 0
 def sell(q, px, d, why):
@@ -59,6 +62,8 @@ def sell(q, px, d, why):
     log.append((d, why, px, q, cash + qty*px))
 for i in range(s, len(c)):
     r = c[i]
+    if pos is None and MA and trade and c[i-1]['close'] <= sum(x['close'] for x in c[i-MA:i])/MA:
+        continue  # wait for a close above the N-day SMA before buying again
     if pos is None:  # enter at the open; levels from ATR of the previous closed candle
         e = r['open']; sl = e - K*atr[i-1]; R = e - sl
         qty = cash*(1-FEE)/e; cash = 0.0; trade += 1
