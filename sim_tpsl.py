@@ -2,7 +2,8 @@
 
 Usage: python3 sim_tpsl.py [candles.csv] [--start 2026-01-01] [--usd 100] [--symbol BTCUSDT]
 Without a CSV, daily candles are fetched from the Binance public API.
-CSV columns: date,open,high,low,close (date = YYYY-MM-DD, one row per day).
+CSV columns: date,open,high,low,close (date = YYYY-MM-DD, one row per day), or a
+TradingView "Export chart data" file (time in unix seconds; regular candles, not Heikin Ashi).
 
 Rules:
 - Buy with all cash at the open of the start day; buy again at the next day's open
@@ -33,7 +34,9 @@ def binance(sym, start):
         t0 = k[-1][0] + 86400000
 
 if a:
-    c = [{k: (v if k == 'date' else float(v)) for k, v in r.items()} for r in csv.DictReader(open(a[0]))]
+    def day(r):  # 'date' (YYYY-MM-DD) or TradingView export 'time' (unix seconds)
+        return r['date'] if 'date' in r else dt.datetime.fromtimestamp(int(float(r['time'])), dt.timezone.utc).date().isoformat()
+    c = [{'date': day(r), **{k: float(r[k]) for k in ('open', 'high', 'low', 'close')}} for r in csv.DictReader(open(a[0]))]
 else:
     c = binance(SYM, START)
 c.sort(key=lambda r: r['date'])
