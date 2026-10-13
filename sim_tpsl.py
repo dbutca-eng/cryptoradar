@@ -1,6 +1,6 @@
 """TP/SL backtest on daily candles (default: BTCUSDT, 100 USD from 2026-01-01).
 
-Usage: python3 sim_tpsl.py [candles.csv] [--start 2026-01-01] [--usd 100] [--symbol BTCUSDT]
+Usage: python3 sim_tpsl.py [candles.csv] [--start 2026-01-01] [--usd 100] [--symbol BTCUSDT] [--breakeven]
 Without a CSV, daily candles are fetched from the Binance public API.
 CSV columns: date,open,high,low,close (date = YYYY-MM-DD, one row per day), or a
 TradingView "Export chart data" file (time in unix seconds; regular candles, not Heikin Ashi).
@@ -11,6 +11,7 @@ Rules:
 - SL = entry - 2 x ATR(14) (Signum's GC band is not available historically);
   R = entry - SL; TP1 = entry + 1.5R; TP2 = entry + 3R.
 - TP1: sell 50% of the position. TP2: sell the rest. SL: sell whatever is left.
+- --breakeven: after TP1, move SL to the entry price (active from the next candle).
 - If SL and a TP fall inside the same candle, SL is assumed first (conservative).
 - Fee FEE per side on every buy/sell.
 """
@@ -20,6 +21,8 @@ a = sys.argv[1:]
 def opt(n, d):
     if n in a: i = a.index(n); v = a[i+1]; del a[i:i+2]; return v
     return d
+BE = '--breakeven' in a
+a = [x for x in a if x != '--breakeven']
 START, USD, SYM = opt('--start', '2026-01-01'), float(opt('--usd', 100)), opt('--symbol', 'BTCUSDT')
 
 def binance(sym, start):
@@ -62,9 +65,10 @@ for i in range(s, len(c)):
         pos = {'e': e, 'sl': sl, 'tp1': e+TP1R*R, 'tp2': e+TP2R*R, 'half': False}
         log.append((r['date'], f'BUY #{trade}  SL {sl:,.0f}  TP1 {pos["tp1"]:,.0f}  TP2 {pos["tp2"]:,.0f}', e, qty, qty*e))
     if r['low'] <= pos['sl']:
-        sell(qty, min(pos['sl'], r['open']), r['date'], 'SL'); pos = None; continue
+        sell(qty, min(pos['sl'], r['open']), r['date'], 'SL (breakeven)' if pos['half'] and BE else 'SL'); pos = None; continue
     if not pos['half'] and r['high'] >= pos['tp1']:
         sell(qty/2, max(pos['tp1'], r['open']), r['date'], 'TP1 (50%)'); pos['half'] = True
+        if BE: pos['sl'] = pos['e']
     if r['high'] >= pos['tp2']:
         sell(qty, max(pos['tp2'], r['open']), r['date'], 'TP2 (rest)'); pos = None
 
@@ -76,5 +80,5 @@ for d, why, px, q, v in log:
 print(f"\n{SYM} {c[s]['date']} -> {last['date']}: {USD:.0f} USD -> {final:.2f} USD ({(final/USD-1)*100:+.1f}%)"
       f"{'  [position still open]' if pos else ''}")
 print(f"Buy & hold for comparison: {bh:.2f} USD ({(bh/USD-1)*100:+.1f}%)")
-n = sum(1 for x in log if x[1] == 'SL'); t2 = sum(1 for x in log if x[1].startswith('TP2')); t1 = sum(1 for x in log if x[1].startswith('TP1'))
+n = sum(1 for x in log if x[1].startswith('SL')); t2 = sum(1 for x in log if x[1].startswith('TP2')); t1 = sum(1 for x in log if x[1].startswith('TP1'))
 print(f"Trades: {trade} | TP1 hits: {t1} | TP2 hits: {t2} | SL exits: {n}")
