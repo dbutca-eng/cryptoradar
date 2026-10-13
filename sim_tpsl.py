@@ -55,6 +55,7 @@ for i in range(ATRN-1, len(c)):
 s = next(i for i, r in enumerate(c) if r['date'] >= START)
 if s < max(ATRN, MA) + 1: sys.exit(f'need at least {max(ATRN, MA)+1} candles before {START}')
 
+def px(x): return f'{x:,.0f}' if x >= 1000 else (f'{x:,.2f}' if x >= 1 else f'{x:.5g}')
 cash, qty, pos, log, trade = USD, 0.0, None, [], 0
 def sell(q, px, d, why):
     global cash, qty
@@ -68,7 +69,7 @@ for i in range(s, len(c)):
         e = r['open']; sl = e - K*atr[i-1]; R = e - sl
         qty = cash*(1-FEE)/e; cash = 0.0; trade += 1
         pos = {'e': e, 'sl': sl, 'tp1': e+TP1R*R, 'tp2': e+TP2R*R, 'half': False}
-        log.append((r['date'], f'BUY #{trade}  SL {sl:,.0f}  TP1 {pos["tp1"]:,.0f}  TP2 {pos["tp2"]:,.0f}', e, qty, qty*e))
+        log.append((r['date'], f'BUY #{trade}  SL {px(sl)}  TP1 {px(pos["tp1"])}  TP2 {px(pos["tp2"])}', e, qty, qty*e))
     if r['low'] <= pos['sl']:
         sell(qty, min(pos['sl'], r['open']), r['date'], 'SL (breakeven)' if pos['half'] and BE else 'SL'); pos = None; continue
     if not pos['half'] and r['high'] >= pos['tp1']:
@@ -80,8 +81,8 @@ for i in range(s, len(c)):
 last = c[-1]
 final = cash + qty*last['close']
 bh = USD*(1-FEE)/c[s]['open']*last['close']
-for d, why, px, q, v in log:
-    print(f"{d}  {why:<48} @ {px:>11,.2f}   value {v:>8.2f} USD")
+for d, why, p, q, v in log:
+    print(f"{d}  {why:<48} @ {px(p):>11}   value {v:>8.2f} USD")
 print(f"\n{SYM} {c[s]['date']} -> {last['date']}: {USD:.0f} USD -> {final:.2f} USD ({(final/USD-1)*100:+.1f}%)"
       f"{'  [position still open]' if pos else ''}")
 print(f"Buy & hold for comparison: {bh:.2f} USD ({(bh/USD-1)*100:+.1f}%)")
